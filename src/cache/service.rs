@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -12,26 +12,17 @@ use crate::cache::storage::ThumbStorage;
 
 /// Stateless thumbnail service.
 ///
-/// Holds shared dependencies (storage, generator, ffmpeg path) behind `Arc`s
-/// so it can be cheaply cloned and passed to `tokio::spawn`.
+/// Holds shared dependencies (storage, generator) behind `Arc`s so it can be
+/// cheaply cloned and passed to `tokio::spawn`.
 #[derive(Clone)]
 pub struct ThumbnailService {
     storage: Arc<dyn ThumbStorage>,
     generator: Arc<crate::ThumbnailGenerator>,
-    ffmpeg_bin: Option<PathBuf>,
 }
 
 impl ThumbnailService {
-    pub fn new(
-        storage: Arc<dyn ThumbStorage>,
-        generator: Arc<crate::ThumbnailGenerator>,
-        ffmpeg_bin: Option<PathBuf>,
-    ) -> Self {
-        Self {
-            storage,
-            generator,
-            ffmpeg_bin,
-        }
+    pub fn new(storage: Arc<dyn ThumbStorage>, generator: Arc<crate::ThumbnailGenerator>) -> Self {
+        Self { storage, generator }
     }
 
     // ── Key convention ────────────────────────────────────────────────────────
@@ -112,7 +103,7 @@ impl ThumbnailService {
         // 3. Generate thumbnail
         let thumb = self
             .generator
-            .generate_from_bytes(label, &raw, &ext, w, h, format, self.ffmpeg_bin.as_deref())
+            .generate_from_bytes(label, &raw, &ext, w, h, format)
             .await
             .map_err(|e| ThumbError::Generate(e.to_string()))?;
 

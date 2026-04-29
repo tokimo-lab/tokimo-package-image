@@ -1,11 +1,10 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use tokio::fs;
 use tokio::sync::Semaphore;
 
 use crate::error::ThumbnailError;
-use crate::resize::{resize_to_format, resize_to_format_from_memory, resize_with_ffmpeg};
+use crate::resize::{resize_to_format, resize_to_format_from_memory};
 use crate::vips::OutputFormat;
 
 /// Maximum concurrent thumbnail generation tasks.
@@ -53,7 +52,6 @@ impl ThumbnailGenerator {
         width: u32,
         height: u32,
         format: OutputFormat,
-        ffmpeg_bin: Option<&Path>,
     ) -> Result<(Vec<u8>, &'static str), ThumbnailError> {
         let _permit = self
             .semaphore
@@ -62,22 +60,12 @@ impl ThumbnailGenerator {
             .map_err(|_| ThumbnailError::SemaphoreClosed)?;
 
         let src = source_path.to_owned();
-        let ffmpeg = ffmpeg_bin.map(std::borrow::ToOwned::to_owned);
         let w = width;
         let h = height;
 
-        let bytes = tokio::task::spawn_blocking(move || match resize_to_format(&src, w, h, format) {
-            Ok(b) => Ok(b),
-            Err(img_err) => {
-                if let Some(ffmpeg_path) = ffmpeg {
-                    resize_with_ffmpeg(&ffmpeg_path, &src, w)
-                } else {
-                    Err(img_err)
-                }
-            }
-        })
-        .await
-        .map_err(|e| ThumbnailError::Join(e.to_string()))??;
+        let bytes = tokio::task::spawn_blocking(move || resize_to_format(&src, w, h, format))
+            .await
+            .map_err(|e| ThumbnailError::Join(e.to_string()))??;
 
         Ok((bytes, format.mime_type()))
     }
@@ -86,8 +74,7 @@ impl ThumbnailGenerator {
     ///
     /// For known image formats (JPEG, PNG, WebP, etc.) the bytes are decoded
     /// directly in memory — no temp file I/O.  Unknown/unsupported formats fall
-    /// back to writing a temp file so that `FFmpeg` can handle them.
-    #[allow(clippy::too_many_arguments)]
+    /// back to writing a temp file so libvips can read them via the file API.
     pub async fn generate_from_bytes(
         &self,
         photo_id: &str,
@@ -96,7 +83,6 @@ impl ThumbnailGenerator {
         width: u32,
         height: u32,
         format: OutputFormat,
-        ffmpeg_bin: Option<&Path>,
     ) -> Result<(Vec<u8>, &'static str), ThumbnailError> {
         let _permit = self
             .semaphore
@@ -120,27 +106,19 @@ impl ThumbnailGenerator {
             return Ok((result, format.mime_type()));
         }
 
-        // Fallback: write temp file for ffmpeg / exotic formats
+        // Fallback: write temp file and let libvips handle it via the file API
+        // (covers HEIC/HEIF/AVIF and other formats that libvips supports natively
+        // but the in-memory `image` crate cannot decode).
         let tmp_path = std::env::temp_dir().join(format!("tokimo_thumb_{photo_id}.{ext}"));
         fs::write(&tmp_path, file_bytes).await.map_err(ThumbnailError::Io)?;
 
         let tmp_str = tmp_path.to_string_lossy().to_string();
-        let ffmpeg = ffmpeg_bin.map(std::borrow::ToOwned::to_owned);
         let w = width;
         let h = height;
 
-        let result = tokio::task::spawn_blocking(move || match resize_to_format(&tmp_str, w, h, format) {
-            Ok(b) => Ok(b),
-            Err(img_err) => {
-                if let Some(ffmpeg_path) = ffmpeg {
-                    resize_with_ffmpeg(&ffmpeg_path, &tmp_str, w)
-                } else {
-                    Err(img_err)
-                }
-            }
-        })
-        .await
-        .map_err(|e| ThumbnailError::Join(e.to_string()))?;
+        let result = tokio::task::spawn_blocking(move || resize_to_format(&tmp_str, w, h, format))
+            .await
+            .map_err(|e| ThumbnailError::Join(e.to_string()))?;
 
         let _ = fs::remove_file(&tmp_path).await;
 

@@ -13,7 +13,7 @@ use crate::vips::OutputFormat;
 /// CPU-bound: decode image, apply EXIF orientation, resize, encode to target format.
 ///
 /// Uses libvips for shrink-on-load when possible, falling back to the `image`
-/// crate + `FFmpeg` for formats vips cannot handle.
+/// crate for formats vips cannot handle.
 pub(crate) fn resize_to_format(
     source_path: &str,
     width: u32,
@@ -193,31 +193,4 @@ fn read_exif_orientation(path: &str) -> Option<Orientation> {
         return Orientation::from_exif(val);
     }
     None
-}
-
-/// Fallback: use ffmpeg FFI to decode the image to JPEG, then re-encode as WebP.
-/// Handles formats the `image` crate cannot decode (HEIC, AVIF, RAW, etc.).
-pub(crate) fn resize_with_ffmpeg(_ffmpeg_bin: &Path, source_path: &str, width: u32) -> Result<Vec<u8>, ThumbnailError> {
-    use tokimo_package_ffmpeg::image::{ImageDecodeOptions, ImageFormat as FfImageFormat, decode_image};
-
-    let opts = ImageDecodeOptions {
-        width: Some(width),
-        format: FfImageFormat::Jpeg,
-        quality: 2,
-    };
-    let jpeg_data = decode_image(Path::new(source_path), &opts)
-        .map_err(|e| ThumbnailError::Ffmpeg(format!("FFI decode failed: {e}")))?;
-
-    let mut img = image::load_from_memory_with_format(&jpeg_data, ImageFormat::Jpeg).map_err(ThumbnailError::Image)?;
-
-    // FFmpeg doesn't auto-rotate; apply EXIF orientation from the original file
-    if let Some(orientation) = read_exif_orientation(source_path) {
-        img.apply_orientation(orientation);
-    }
-
-    let mut buf = Cursor::new(Vec::with_capacity(32 * 1024));
-    img.write_to(&mut buf, ImageFormat::WebP)
-        .map_err(ThumbnailError::Image)?;
-
-    Ok(buf.into_inner())
 }
