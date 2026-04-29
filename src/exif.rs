@@ -208,7 +208,8 @@ pub fn extract_exif(path: &str) -> Option<ExifData> {
 }
 
 /// Extract EXIF metadata from raw file bytes (works for JPEG, TIFF).
-/// For HEIC/AVIF, kamadak-exif may not work — caller should try ffprobe fallback.
+/// For HEIC/AVIF, kamadak-exif may not extract everything — callers can fall
+/// back to libvips for header-level metadata if needed.
 /// This is CPU-bound and should be called from `spawn_blocking`.
 pub fn extract_exif_from_bytes(bytes: &[u8]) -> Option<ExifData> {
     let mut cursor = std::io::Cursor::new(bytes);

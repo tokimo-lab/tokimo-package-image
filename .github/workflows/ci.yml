@@ -9,8 +9,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  FFMPEG_REPO: tokimo-lab/tokimo-package-ffmpeg
-  FFMPEG_RELEASE_TAG: nightly
   LIBVIPS_REPO: tokimo-lab/tokimo-package-libvips
   LIBVIPS_RELEASE_TAG: v8.18.2-tokimo.3
 
@@ -35,20 +33,6 @@ jobs:
       - name: Install zstd
         run: sudo apt-get update && sudo apt-get install -y zstd
 
-      - name: Download ffmpeg install (linux)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ffmpeg"
-          gh release download "$FFMPEG_RELEASE_TAG" \
-            -R "$FFMPEG_REPO" \
-            -p install-linux.tar.zst \
-            -O "$RUNNER_TEMP/ffmpeg/install-linux.tar.zst"
-          tar --zstd -xf "$RUNNER_TEMP/ffmpeg/install-linux.tar.zst" -C "$RUNNER_TEMP/ffmpeg"
-          ls -la "$RUNNER_TEMP/ffmpeg/install/lib/pkgconfig"
-          cat "$RUNNER_TEMP/ffmpeg/install/META.txt" || true
-
       - name: Download libvips install (linux)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -60,10 +44,6 @@ jobs:
             -p install-linux.tar.zst \
             -O "$RUNNER_TEMP/libvips/install-linux.tar.zst"
           tar --zstd -xf "$RUNNER_TEMP/libvips/install-linux.tar.zst" -C "$RUNNER_TEMP/libvips"
-          # The libvips tarball bundles libstdc++.so.* — drop them so the system
-          # libstdc++ (newer GLIBCXX) is used. Otherwise rusty_ffmpeg's build.rs
-          # fails loading libclang-18 which requires GLIBCXX_3.4.26.
-          rm -f "$RUNNER_TEMP/libvips/lib"/libstdc++.so*
           # Create the unversioned symlink expected by `-lgobject-2.0`.
           ln -sf libgobject-2.0.so.0 "$RUNNER_TEMP/libvips/lib/libgobject-2.0.so"
           ls -la "$RUNNER_TEMP/libvips/lib"
@@ -76,33 +56,21 @@ jobs:
 
       - name: cargo clippy
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
 
       - name: cargo build
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
         run: cargo build --lib --bins --tests
 
       - name: cargo test
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-        run: cargo test --lib --bins
+          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+        run: cargo test --lib --bins --tests
 
   macos:
     name: macos (build + clippy + test)
@@ -114,34 +82,12 @@ jobs:
       - name: Install runtime dependencies (Homebrew)
         # macOS dylibs in install/ have absolute LC_LOAD_DYLIB paths into
         # /opt/homebrew/opt/<dep>/lib/. Without these brew packages, dyld
-        # fails when loading any binary linking libavformat or libvips.
+        # fails when loading any binary linking libvips.
         # `brew install vips` pulls in the libvips runtime closure (glib,
         # libpng, webp, libtiff, librsvg, orc, fftw, lcms2, libheif, ...).
         run: |
           brew update
-          brew install \
-            pkg-config zstd \
-            x264 x265 dav1d svt-av1 libvpx aom \
-            opus libvorbis lame fdk-aac theora libsoxr libopenmpt \
-            libass freetype fribidi harfbuzz fontconfig \
-            libbluray webp zimg chromaprint srt openjpeg jpeg-xl \
-            zvbi \
-            vulkan-headers vulkan-loader molten-vk libplacebo shaderc glslang \
-            vips
-
-      - name: Download ffmpeg install (macos)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ffmpeg"
-          gh release download "$FFMPEG_RELEASE_TAG" \
-            -R "$FFMPEG_REPO" \
-            -p install-macos-arm64.tar.zst \
-            -O "$RUNNER_TEMP/ffmpeg/install-macos-arm64.tar.zst"
-          tar --zstd -xf "$RUNNER_TEMP/ffmpeg/install-macos-arm64.tar.zst" -C "$RUNNER_TEMP/ffmpeg"
-          ls -la "$RUNNER_TEMP/ffmpeg/install/lib/pkgconfig"
-          cat "$RUNNER_TEMP/ffmpeg/install/META.txt" || true
+          brew install pkg-config zstd vips
 
       - name: Download libvips install (macos)
         env:
@@ -166,33 +112,21 @@ jobs:
 
       - name: cargo clippy
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
 
       - name: cargo build
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
         run: cargo build --lib --bins --tests
 
       - name: cargo test
         env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/ffmpeg/install/include
-          FFMPEG_DYN_DIR: ${{ runner.temp }}/ffmpeg/install/lib
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib:${{ runner.temp }}/ffmpeg/install/lib
-          PKG_CONFIG_PATH: ${{ runner.temp }}/ffmpeg/install/lib/pkgconfig
-        run: cargo test --lib --bins
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+        run: cargo test --lib --bins --tests
 
   windows:
     name: windows (build + clippy + test)
@@ -200,26 +134,6 @@ jobs:
     needs: fmt
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download ffmpeg install (windows)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ffmpeg"
-          gh release download "$FFMPEG_RELEASE_TAG" \
-            -R "$FFMPEG_REPO" \
-            -p install-windows.tar.zst \
-            -O "$RUNNER_TEMP/ffmpeg/install-windows.tar.zst"
-          # windows-latest ships bsdtar which handles zstd via --use-compress-program=zstd.
-          # cd into the target dir first because git-bash tar misparses drive-letter
-          # paths like "D:\..." even with --force-local when passed via -C.
-          cd "$RUNNER_TEMP/ffmpeg"
-          tar --force-local --use-compress-program=zstd -xf install-windows.tar.zst
-          ls "$RUNNER_TEMP/ffmpeg/install-windows/bin"
-          ls "$RUNNER_TEMP/ffmpeg/ffmpeg-binding-windows"
-          cat "$RUNNER_TEMP/ffmpeg/install-windows/META.txt" || true
 
       - name: Download libvips install (windows)
         shell: bash
@@ -252,17 +166,12 @@ jobs:
       - name: cargo clippy / build / test
         shell: pwsh
         env:
-          FFMPEG_LIBS_DIR: ${{ runner.temp }}\ffmpeg\install-windows\lib
-          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}\ffmpeg\install-windows\include
-          FFMPEG_DLL_PATH: ${{ runner.temp }}\ffmpeg\install-windows\bin
-          FFMPEG_LINK_MODE: dynamic
-          FFMPEG_BINDING_PATH: ${{ runner.temp }}\ffmpeg\ffmpeg-binding-windows\binding.rs
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}\libvips
         run: |
-          $env:PATH = "${{ runner.temp }}\libvips\bin;${{ runner.temp }}\ffmpeg\install-windows\bin;" + $env:PATH
+          $env:PATH = "${{ runner.temp }}\libvips\bin;" + $env:PATH
           cargo clippy --target x86_64-pc-windows-gnu --lib --bins --tests -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --target x86_64-pc-windows-gnu --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --target x86_64-pc-windows-gnu --lib --bins
+          cargo test --target x86_64-pc-windows-gnu --lib --bins --tests
           exit $LASTEXITCODE
