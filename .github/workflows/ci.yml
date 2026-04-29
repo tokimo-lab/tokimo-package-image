@@ -60,6 +60,12 @@ jobs:
             -p install-linux.tar.zst \
             -O "$RUNNER_TEMP/libvips/install-linux.tar.zst"
           tar --zstd -xf "$RUNNER_TEMP/libvips/install-linux.tar.zst" -C "$RUNNER_TEMP/libvips"
+          # The libvips tarball bundles libstdc++.so.* — drop them so the system
+          # libstdc++ (newer GLIBCXX) is used. Otherwise rusty_ffmpeg's build.rs
+          # fails loading libclang-18 which requires GLIBCXX_3.4.26.
+          rm -f "$RUNNER_TEMP/libvips/lib"/libstdc++.so*
+          # Create the unversioned symlink expected by `-lgobject-2.0`.
+          ln -sf libgobject-2.0.so.0 "$RUNNER_TEMP/libvips/lib/libgobject-2.0.so"
           ls -la "$RUNNER_TEMP/libvips/lib"
 
       - uses: dtolnay/rust-toolchain@stable
@@ -148,6 +154,8 @@ jobs:
             -p install-macos-arm64.tar.zst \
             -O "$RUNNER_TEMP/libvips/install-macos-arm64.tar.zst"
           tar --zstd -xf "$RUNNER_TEMP/libvips/install-macos-arm64.tar.zst" -C "$RUNNER_TEMP/libvips"
+          # Create the unversioned symlink expected by `-lgobject-2.0`.
+          ln -sf libgobject-2.0.0.dylib "$RUNNER_TEMP/libvips/lib/libgobject-2.0.dylib"
           ls -la "$RUNNER_TEMP/libvips/lib"
 
       - uses: dtolnay/rust-toolchain@stable
