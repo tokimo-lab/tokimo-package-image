@@ -1,5 +1,6 @@
 //! On-the-fly image resize, thumbnail generation, RAW preview & EXIF.
 
+pub mod cache;
 pub mod raw_preview;
 pub mod vips;
 
@@ -15,5 +16,6 @@ pub use metadata::{
     extract_date_from_filename, extract_date_via_ffprobe, file_mtime_as_date, get_dimensions_via_ffprobe,
     get_image_dimensions, get_image_dimensions_from_bytes,
 };
+pub use cache::{BytesReader, ThumbError, ThumbOrigin, ThumbStorage, ThumbnailService};
 pub use thumbnail::ThumbnailGenerator;
 pub use vips::OutputFormat;
