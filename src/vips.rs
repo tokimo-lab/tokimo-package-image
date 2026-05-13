@@ -12,6 +12,27 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 
 type Gsize = u64;
 
+// ── FFI trace (set TOKIMO_VIPS_TRACE=1 to print every libvips call) ─────────
+fn trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("TOKIMO_VIPS_TRACE").is_ok_and(|v| v == "1"))
+}
+macro_rules! vtrace {
+    ($($arg:tt)*) => {
+        if trace_enabled() {
+            let line = format!($($arg)*);
+            eprintln!(
+                "[VIPS_TRACE tid={:?} t={:?}] {}",
+                std::thread::current().id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+                line
+            );
+            use std::io::Write;
+            let _ = std::io::stderr().flush();
+        }
+    };
+}
+
 #[repr(C)]
 struct VipsImage {
     _private: [u8; 0],
@@ -351,34 +372,41 @@ use sys::*;
 // ── Initialization ─────────────────────────────────────────────────────────
 
 use std::sync::OnceLock;
+// Cached result of one-shot init. Use `OnceLock::get_or_init` (not check-then-set)
+// so concurrent callers serialize on the same closure. The earlier
+// `match get(); ... set()` pattern allowed two tokio blocking threads to both
+// call `vips_init()` concurrently, corrupting GLib's GType registry —
+// manifesting as `GLib-GObject-WARNING **: cannot retrieve class for invalid
+// (unclassed) type '<invalid>'` followed by SIGSEGV ~3 s later.
 static VIPS_LOADED: OnceLock<bool> = OnceLock::new();
 
 fn ensure_init() -> Result<(), String> {
-    match VIPS_LOADED.get() {
-        Some(&true) => return Ok(()),
-        Some(&false) => return Err("libvips not available on this system".into()),
-        None => {}
-    }
+    let ok = *VIPS_LOADED.get_or_init(|| {
+        vtrace!("ensure_init: BEGIN sys::load");
+        if !unsafe { sys::load() } {
+            return false;
+        }
+        vtrace!("ensure_init: sys::load OK; vips_init BEGIN");
 
-    if !unsafe { sys::load() } {
-        let _ = VIPS_LOADED.set(false);
-        return Err("libvips not available on this system".into());
-    }
+        if unsafe { vips_init(c"tokimo".as_ptr().cast::<c_char>()) } != 0 {
+            return false;
+        }
+        vtrace!("ensure_init: vips_init OK");
 
-    if unsafe { vips_init(c"tokimo".as_ptr().cast::<c_char>()) } != 0 {
-        let _ = VIPS_LOADED.set(false);
-        return Err(format!("vips_init failed: {}", vips_error_detail()));
-    }
+        unsafe {
+            vips_concurrency_set(1);
+            vips_cache_set_max(0);
+            vips_cache_set_max_mem(0);
+            vips_cache_set_max_files(0);
+        }
+        true
+    });
 
-    unsafe {
-        vips_concurrency_set(1);
-        vips_cache_set_max(0);
-        vips_cache_set_max_mem(0);
-        vips_cache_set_max_files(0);
+    if ok {
+        Ok(())
+    } else {
+        Err("libvips not available on this system".into())
     }
-
-    let _ = VIPS_LOADED.set(true);
-    Ok(())
 }
 
 fn vips_error_detail() -> String {
@@ -408,45 +436,61 @@ pub fn thumbnail_to_format(buffer: &[u8], width: u32, height: u32, format: Outpu
     let mut out: *mut VipsImage = std::ptr::null_mut();
 
     let rc = if height == 0 {
+        vtrace!("vips_thumbnail_buffer BEGIN len={} w={} h=auto", buffer.len(), w);
+        let r;
         #[cfg(not(windows))]
-        unsafe {
-            vips_thumbnail_buffer(
-                buffer.as_ptr().cast::<c_void>(),
-                buffer.len() as Gsize,
-                &raw mut out,
-                w,
-                std::ptr::null::<c_void>(),
-            )
+        {
+            r = unsafe {
+                vips_thumbnail_buffer(
+                    buffer.as_ptr().cast::<c_void>(),
+                    buffer.len() as Gsize,
+                    &raw mut out,
+                    w,
+                    std::ptr::null::<c_void>(),
+                )
+            };
         }
         #[cfg(windows)]
-        unsafe {
-            vips_thumbnail_buffer_simple(buffer.as_ptr().cast::<c_void>(), buffer.len() as Gsize, &raw mut out, w)
+        {
+            r = unsafe {
+                vips_thumbnail_buffer_simple(buffer.as_ptr().cast::<c_void>(), buffer.len() as Gsize, &raw mut out, w)
+            };
         }
+        vtrace!("vips_thumbnail_buffer END rc={}", r);
+        r
     } else {
+        vtrace!("vips_thumbnail_buffer BEGIN len={} w={} h={}", buffer.len(), w, h);
+        let r;
         #[cfg(not(windows))]
-        unsafe {
-            vips_thumbnail_buffer(
-                buffer.as_ptr().cast::<c_void>(),
-                buffer.len() as Gsize,
-                &raw mut out,
-                w,
-                c"height".as_ptr().cast::<c_char>(),
-                h,
-                c"size".as_ptr().cast::<c_char>(),
-                VIPS_SIZE_DOWN,
-                std::ptr::null::<c_void>(),
-            )
+        {
+            r = unsafe {
+                vips_thumbnail_buffer(
+                    buffer.as_ptr().cast::<c_void>(),
+                    buffer.len() as Gsize,
+                    &raw mut out,
+                    w,
+                    c"height".as_ptr().cast::<c_char>(),
+                    h,
+                    c"size".as_ptr().cast::<c_char>(),
+                    VIPS_SIZE_DOWN,
+                    std::ptr::null::<c_void>(),
+                )
+            };
         }
         #[cfg(windows)]
-        unsafe {
-            vips_thumbnail_buffer_opts(
-                buffer.as_ptr().cast::<c_void>(),
-                buffer.len() as Gsize,
-                &raw mut out,
-                w,
-                h,
-            )
+        {
+            r = unsafe {
+                vips_thumbnail_buffer_opts(
+                    buffer.as_ptr().cast::<c_void>(),
+                    buffer.len() as Gsize,
+                    &raw mut out,
+                    w,
+                    h,
+                )
+            };
         }
+        vtrace!("vips_thumbnail_buffer END rc={}", r);
+        r
     };
 
     if rc != 0 || out.is_null() {
@@ -465,32 +509,42 @@ pub fn thumbnail_file_to_format(path: &str, width: u32, height: u32, format: Out
     let mut out: *mut VipsImage = std::ptr::null_mut();
 
     let rc = if height == 0 {
+        vtrace!("vips_thumbnail BEGIN path={:?} w={} h=auto", path, w);
+        let r;
         #[cfg(not(windows))]
-        unsafe {
-            vips_thumbnail(c_path.as_ptr(), &raw mut out, w, std::ptr::null::<c_void>())
+        {
+            r = unsafe { vips_thumbnail(c_path.as_ptr(), &raw mut out, w, std::ptr::null::<c_void>()) };
         }
         #[cfg(windows)]
-        unsafe {
-            vips_thumbnail_simple(c_path.as_ptr(), &raw mut out, w)
+        {
+            r = unsafe { vips_thumbnail_simple(c_path.as_ptr(), &raw mut out, w) };
         }
+        vtrace!("vips_thumbnail END rc={}", r);
+        r
     } else {
+        vtrace!("vips_thumbnail BEGIN path={:?} w={} h={}", path, w, h);
+        let r;
         #[cfg(not(windows))]
-        unsafe {
-            vips_thumbnail(
-                c_path.as_ptr(),
-                &raw mut out,
-                w,
-                c"height".as_ptr().cast::<c_char>(),
-                h,
-                c"size".as_ptr().cast::<c_char>(),
-                VIPS_SIZE_DOWN,
-                std::ptr::null::<c_void>(),
-            )
+        {
+            r = unsafe {
+                vips_thumbnail(
+                    c_path.as_ptr(),
+                    &raw mut out,
+                    w,
+                    c"height".as_ptr().cast::<c_char>(),
+                    h,
+                    c"size".as_ptr().cast::<c_char>(),
+                    VIPS_SIZE_DOWN,
+                    std::ptr::null::<c_void>(),
+                )
+            };
         }
         #[cfg(windows)]
-        unsafe {
-            vips_thumbnail_opts(c_path.as_ptr(), &raw mut out, w, h)
+        {
+            r = unsafe { vips_thumbnail_opts(c_path.as_ptr(), &raw mut out, w, h) };
         }
+        vtrace!("vips_thumbnail END rc={}", r);
+        r
     };
 
     if rc != 0 || out.is_null() {
@@ -521,17 +575,23 @@ fn encode_format(thumb: *mut VipsImage, format: OutputFormat) -> Result<Vec<u8>,
     let c_suffixed = std::ffi::CString::new(suffixed.as_str()).map_err(|e| format!("invalid path: {e}"))?;
 
     let rc = {
+        vtrace!("vips_image_write_to_file BEGIN suffixed={}", suffixed);
+        let r;
         #[cfg(not(windows))]
-        unsafe {
-            vips_image_write_to_file(thumb, c_suffixed.as_ptr(), std::ptr::null::<c_void>())
+        {
+            r = unsafe { vips_image_write_to_file(thumb, c_suffixed.as_ptr(), std::ptr::null::<c_void>()) };
         }
         #[cfg(windows)]
-        unsafe {
-            vips_image_write_to_file_simple(thumb, c_suffixed.as_ptr())
+        {
+            r = unsafe { vips_image_write_to_file_simple(thumb, c_suffixed.as_ptr()) };
         }
+        vtrace!("vips_image_write_to_file END rc={}", r);
+        r
     };
 
+    vtrace!("g_object_unref(thumb={:p}) BEGIN", thumb);
     unsafe { g_object_unref(thumb.cast::<c_void>()) };
+    vtrace!("g_object_unref END");
 
     if rc != 0 {
         let _ = std::fs::remove_file(&tmp_path);
