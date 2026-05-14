@@ -128,7 +128,7 @@ mod sys {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::core::{PCSTR, PCWSTR, s};
 
-    /// Locate the bundled `bin/libvips/current/bin` directory that contains
+    /// Locate the bundled `bin/tokimo-lib/current/bin` directory that contains
     /// `libvips-42.dll` and friends. Mirrors the lookup in build.rs.
     fn libvips_dll_dir() -> Option<PathBuf> {
         if let Ok(p) = std::env::var("TOKIMO_DEP_LIBVIPS_DIR") {
@@ -140,7 +140,7 @@ mod sys {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let mut dir = manifest_dir.as_path();
         loop {
-            let cand = dir.join("bin").join("libvips").join("current").join("bin");
+            let cand = dir.join("bin").join("tokimo-lib").join("current").join("bin");
             if cand.is_dir() {
                 return Some(cand);
             }
@@ -194,7 +194,7 @@ mod sys {
     static F_G_OBJECT_UNREF: OnceLock<unsafe extern "C" fn(*mut c_void)> = OnceLock::new();
 
     unsafe fn find_and_load(file_name: &str) -> Option<HMODULE> {
-        // 1. Prefer absolute path inside bin/libvips/current/bin (deps.toml-managed,
+        // 1. Prefer absolute path inside bin/tokimo-lib/current/bin (deps.toml-managed,
         //    avoids accidentally loading an unrelated libvips from system PATH).
         if let Some(dir) = libvips_dll_dir() {
             let abs = dir.join(file_name);

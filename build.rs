@@ -1,4 +1,4 @@
-//! Build script: locate libvips from `bin/libvips/current` provided by deps.toml.
+//! Build script: locate libvips from `bin/tokimo-lib/current` provided by deps.toml.
 //!
 //! - Linux/macOS: emit `cargo:rustc-link-search=native=...` and rpath so the
 //!   linker finds `libvips` + `libgobject-2.0` declared by `#[link(...)]` in
@@ -10,7 +10,7 @@
 //! Lookup order:
 //!   1. `TOKIMO_DEP_LIBVIPS_DIR` env override (must point at the install dir
 //!      containing `lib/`, `include/`, `bin/`).
-//!   2. Walk up from `CARGO_MANIFEST_DIR` looking for `bin/libvips/current`.
+//!   2. Walk up from `CARGO_MANIFEST_DIR` looking for `bin/tokimo-lib/current`.
 #![allow(clippy::panic, clippy::expect_used, clippy::manual_assert)]
 
 use std::env;
@@ -26,7 +26,7 @@ fn main() {
 
     if !lib_dir.is_dir() {
         panic!(
-            "libvips install missing lib/: {} (run `pnpm deps --dep libvips`)",
+            "libvips install missing lib/: {} (run `pnpm deps --dep tokimo-lib`)",
             lib_dir.display()
         );
     }
@@ -62,7 +62,7 @@ fn locate_libvips() -> PathBuf {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let mut dir = manifest_dir.as_path();
     loop {
-        let candidate = dir.join("bin").join("libvips").join("current");
+        let candidate = dir.join("bin").join("tokimo-lib").join("current");
         if candidate.is_dir() {
             return candidate;
         }
@@ -73,7 +73,7 @@ fn locate_libvips() -> PathBuf {
     }
 
     panic!(
-        "Could not find bin/libvips/current. Run `pnpm deps --dep libvips` from the workspace root, \
+        "Could not find bin/tokimo-lib/current. Run `pnpm deps --dep tokimo-lib` from the workspace root, \
          or set TOKIMO_DEP_LIBVIPS_DIR."
     );
 }

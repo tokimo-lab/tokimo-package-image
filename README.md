@@ -50,8 +50,8 @@ MIT
 
 This crate links **libvips** at compile time (via `#[link(...)]` declarations
 in `src/vips.rs`). Inside the [`tokimo.io`](https://github.com/tokimo-lab/tokimo.io)
-monorepo libvips is resolved automatically — populated by `pnpm deps --dep libvips`
-into `bin/libvips/current`. Outside the monorepo you need to provide it yourself.
+monorepo libvips is resolved automatically — populated by `pnpm deps --dep tokimo-lib`
+into `bin/tokimo-lib/current`. Outside the monorepo you need to provide it yourself.
 
 Easiest path:
 
