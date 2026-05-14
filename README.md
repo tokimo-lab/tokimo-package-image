@@ -1,5 +1,7 @@
 # tokimo-package-image
 
+⚠️ **This crate no longer builds the libvips native binaries itself. Native builds (Linux/macOS/Windows) live in [tokimo-lab/tokimo-lib](https://github.com/tokimo-lab/tokimo-lib). This repo only contains the safe Rust FFI bindings consumed via libloading.**
+
 On-the-fly image resize, thumbnail generation (libvips), RAW preview extraction & EXIF parsing for Tokimo.
 
 ## Features

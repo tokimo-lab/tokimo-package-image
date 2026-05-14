@@ -9,8 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  LIBVIPS_REPO: tokimo-lab/tokimo-package-libvips
-  LIBVIPS_RELEASE_TAG: v8.18.2-tokimo.3
+  TOKIMO_LIB_REPO: tokimo-lab/tokimo-lib
+  TOKIMO_LIB_VERSION: v1.0.2
 
 jobs:
   fmt:
@@ -24,29 +24,24 @@ jobs:
       - run: cargo fmt --all -- --check
 
   linux:
-    name: linux (build + clippy + test)
+    name: linux (clippy + test)
     runs-on: ubuntu-latest
     needs: fmt
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install zstd
-        run: sudo apt-get update && sudo apt-get install -y zstd
-
-      - name: Download libvips install (linux)
+      - name: Download tokimo-lib (linux-x86_64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/libvips"
-          gh release download "$LIBVIPS_RELEASE_TAG" \
-            -R "$LIBVIPS_REPO" \
-            -p install-linux.tar.zst \
-            -O "$RUNNER_TEMP/libvips/install-linux.tar.zst"
-          tar --zstd -xf "$RUNNER_TEMP/libvips/install-linux.tar.zst" -C "$RUNNER_TEMP/libvips"
-          # Create the unversioned symlink expected by `-lgobject-2.0`.
-          ln -sf libgobject-2.0.so.0 "$RUNNER_TEMP/libvips/lib/libgobject-2.0.so"
-          ls -la "$RUNNER_TEMP/libvips/lib"
+          mkdir -p "$RUNNER_TEMP/tokimo-lib"
+          gh release download "$TOKIMO_LIB_VERSION" \
+            -R "$TOKIMO_LIB_REPO" \
+            -p 'tokimo-lib-linux-x86_64.tar.zst' \
+            -D "$RUNNER_TEMP/tokimo-lib"
+          tar --zstd -xf "$RUNNER_TEMP/tokimo-lib/tokimo-lib-linux-x86_64.tar.zst" -C "$RUNNER_TEMP/tokimo-lib"
+          ls -la "$RUNNER_TEMP/tokimo-lib/lib"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -56,53 +51,35 @@ jobs:
 
       - name: cargo clippy
         env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          LD_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
-
-      - name: cargo build
-        env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
-        run: cargo build --lib --bins --tests
 
       - name: cargo test
         env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          LD_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          LD_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo test --lib --bins --tests
 
   macos:
-    name: macos (build + clippy + test)
+    name: macos (clippy + test)
     runs-on: macos-latest
     needs: fmt
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install runtime dependencies (Homebrew)
-        # macOS dylibs in install/ have absolute LC_LOAD_DYLIB paths into
-        # /opt/homebrew/opt/<dep>/lib/. Without these brew packages, dyld
-        # fails when loading any binary linking libvips.
-        # `brew install vips` pulls in the libvips runtime closure (glib,
-        # libpng, webp, libtiff, librsvg, orc, fftw, lcms2, libheif, ...).
-        run: |
-          brew update
-          brew install pkg-config zstd vips
-
-      - name: Download libvips install (macos)
+      - name: Download tokimo-lib (macos-aarch64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/libvips"
-          gh release download "$LIBVIPS_RELEASE_TAG" \
-            -R "$LIBVIPS_REPO" \
-            -p install-macos-arm64.tar.zst \
-            -O "$RUNNER_TEMP/libvips/install-macos-arm64.tar.zst"
-          tar --zstd -xf "$RUNNER_TEMP/libvips/install-macos-arm64.tar.zst" -C "$RUNNER_TEMP/libvips"
-          # Create the unversioned symlink expected by `-lgobject-2.0`.
-          ln -sf libgobject-2.0.0.dylib "$RUNNER_TEMP/libvips/lib/libgobject-2.0.dylib"
-          ls -la "$RUNNER_TEMP/libvips/lib"
+          mkdir -p "$RUNNER_TEMP/tokimo-lib"
+          gh release download "$TOKIMO_LIB_VERSION" \
+            -R "$TOKIMO_LIB_REPO" \
+            -p 'tokimo-lib-macos-aarch64.tar.zst' \
+            -D "$RUNNER_TEMP/tokimo-lib"
+          tar --zstd -xf "$RUNNER_TEMP/tokimo-lib/tokimo-lib-macos-aarch64.tar.zst" -C "$RUNNER_TEMP/tokimo-lib"
+          ls -la "$RUNNER_TEMP/tokimo-lib/lib"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -112,66 +89,56 @@ jobs:
 
       - name: cargo clippy
         env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
-
-      - name: cargo build
-        env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
-        run: cargo build --lib --bins --tests
 
       - name: cargo test
         env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/libvips
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/libvips/lib
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo test --lib --bins --tests
 
   windows:
-    name: windows (build + clippy + test)
+    name: windows (clippy + test)
     runs-on: windows-latest
     needs: fmt
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download libvips install (windows)
+      - name: Download tokimo-lib (windows-x86_64)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/libvips"
-          gh release download "$LIBVIPS_RELEASE_TAG" \
-            -R "$LIBVIPS_REPO" \
-            -p install-windows.tar.zst \
-            -O "$RUNNER_TEMP/libvips/install-windows.tar.zst"
-          cd "$RUNNER_TEMP/libvips"
-          tar --force-local --use-compress-program=zstd -xf install-windows.tar.zst
-          ls "$RUNNER_TEMP/libvips"
+          mkdir -p "$RUNNER_TEMP/tokimo-lib"
+          gh release download "$TOKIMO_LIB_VERSION" \
+            -R "$TOKIMO_LIB_REPO" \
+            -p 'tokimo-lib-windows-x86_64.tar.zst' \
+            -D "$RUNNER_TEMP/tokimo-lib"
+          cd "$RUNNER_TEMP/tokimo-lib"
+          tar --force-local --use-compress-program=zstd -xf tokimo-lib-windows-x86_64.tar.zst
+          ls "$RUNNER_TEMP/tokimo-lib/lib"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
-          components: clippy, rustfmt
-
-      - name: Install MinGW
-        uses: egor-tensin/setup-mingw@v2
-        with:
-          platform: x64
-          static: 0
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo clippy / build / test
-        shell: pwsh
+      - name: cargo clippy
+        shell: bash
         env:
-          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}\libvips
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
         run: |
-          $env:PATH = "${{ runner.temp }}\libvips\bin;" + $env:PATH
-          cargo clippy --target x86_64-pc-windows-gnu --lib --bins --tests -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --target x86_64-pc-windows-gnu --lib --bins --tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --target x86_64-pc-windows-gnu --lib --bins --tests
-          exit $LASTEXITCODE
+          export PATH="${RUNNER_TEMP}/tokimo-lib/bin:$PATH"
+          cargo clippy --lib --bins --tests -- -D warnings
+
+      - name: cargo test
+        shell: bash
+        env:
+          TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+        run: |
+          export PATH="${RUNNER_TEMP}/tokimo-lib/bin:$PATH"
+          cargo test --lib --bins --tests
