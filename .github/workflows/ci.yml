@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   TOKIMO_LIB_REPO: tokimo-lab/tokimo-lib
-  TOKIMO_LIB_VERSION: v1.1.5
+  TOKIMO_LIB_VERSION: v1.1.6
 
 jobs:
   fmt:
