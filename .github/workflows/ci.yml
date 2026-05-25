@@ -81,6 +81,9 @@ jobs:
           tar --zstd -xf "$RUNNER_TEMP/tokimo-lib/tokimo-lib-macos-aarch64.tar.zst" -C "$RUNNER_TEMP/tokimo-lib"
           ls -la "$RUNNER_TEMP/tokimo-lib/lib"
 
+      - name: Fix tokimo-lib dylib paths
+        run: bash scripts/fixup-tokimo-lib-dylibs.sh "${{ runner.temp }}/tokimo-lib/lib"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
