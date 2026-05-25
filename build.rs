@@ -1,4 +1,4 @@
-//! Build script: locate libvips from `bin/tokimo-lib/current` provided by deps.toml.
+//! Build script: locate libvips from `TOKIMO_DEP_LIBVIPS_DIR` env var.
 //!
 //! - Linux/macOS: emit `cargo:rustc-link-search=native=...` and rpath so the
 //!   linker finds `libvips` + `libgobject-2.0` declared by `#[link(...)]` in
@@ -6,11 +6,6 @@
 //!   LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
 //! - Windows (msvc/mingw): emit search dir for any import lib (.dll.a / .lib);
 //!   actual DLL loading happens at runtime via `LoadLibraryW` in src/vips.rs.
-//!
-//! Lookup order:
-//!   1. `TOKIMO_DEP_LIBVIPS_DIR` env override (must point at the install dir
-//!      containing `lib/`, `include/`, `bin/`).
-//!   2. Walk up from `CARGO_MANIFEST_DIR` looking for `bin/tokimo-lib/current`.
 #![allow(clippy::panic, clippy::expect_used, clippy::manual_assert)]
 
 use std::env;
@@ -51,29 +46,13 @@ fn main() {
 }
 
 fn locate_libvips() -> PathBuf {
-    if let Ok(p) = env::var("TOKIMO_DEP_LIBVIPS_DIR") {
-        let pb = PathBuf::from(&p);
-        if pb.is_dir() {
-            return pb;
-        }
-        panic!("TOKIMO_DEP_LIBVIPS_DIR set but not a directory: {p}");
-    }
-
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let mut dir = manifest_dir.as_path();
-    loop {
-        let candidate = dir.join("bin").join("tokimo-lib").join("current");
-        if candidate.is_dir() {
-            return candidate;
-        }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => break,
-        }
-    }
-
-    panic!(
-        "Could not find bin/tokimo-lib/current. Run `pnpm deps --dep tokimo-lib` from the workspace root, \
-         or set TOKIMO_DEP_LIBVIPS_DIR."
+    let p = env::var("TOKIMO_DEP_LIBVIPS_DIR").expect(
+        "TOKIMO_DEP_LIBVIPS_DIR not set. \
+         Set it in .cargo/config.toml or run `pnpm deps --dep tokimo-lib`.",
     );
+    let pb = PathBuf::from(&p);
+    if pb.is_dir() {
+        return pb;
+    }
+    panic!("TOKIMO_DEP_LIBVIPS_DIR set but not a directory: {p}");
 }
