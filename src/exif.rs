@@ -30,6 +30,22 @@ pub struct ExifData {
     pub raw_tags: HashMap<String, String>,
 }
 
+/// Convert an EXIF field value to a clean UTF-8 string.
+/// Handles non-ASCII bytes (display_value() escapes them as \xNN) and
+/// trims surrounding quotes, trailing commas, and whitespace.
+fn exif_field_to_string(field: &exif::Field) -> String {
+    let s = match &field.value {
+        exif::Value::Ascii(vecs) => {
+            let bytes: Vec<u8> = vecs.iter().flatten().copied().collect();
+            String::from_utf8_lossy(&bytes).trim().to_string()
+        }
+        _ => field.display_value().to_string(),
+    };
+    // Trim surrounding quotes, trailing commas, and whitespace
+    s.trim_matches(|c: char| c == '"' || c == ',' || c == ' ' || c == '\0')
+        .to_string()
+}
+
 /// Shared helper: extract all EXIF tag values from a parsed `exif::Exif` container.
 fn parse_exif_tags(exif: &exif::Exif) -> ExifData {
     let mut data = ExifData::default();
@@ -41,14 +57,14 @@ fn parse_exif_tags(exif: &exif::Exif) -> ExifData {
     }
 
     if let Some(field) = exif.get_field(exif::Tag::Make, exif::In::PRIMARY) {
-        data.camera_make = Some(field.display_value().to_string().trim_matches('"').to_string());
+        data.camera_make = Some(exif_field_to_string(field));
     }
     if let Some(field) = exif.get_field(exif::Tag::Model, exif::In::PRIMARY) {
-        data.camera_model = Some(field.display_value().to_string().trim_matches('"').to_string());
+        data.camera_model = Some(exif_field_to_string(field));
     }
 
     if let Some(field) = exif.get_field(exif::Tag::LensModel, exif::In::PRIMARY) {
-        data.lens_model = Some(field.display_value().to_string().trim_matches('"').to_string());
+        data.lens_model = Some(exif_field_to_string(field));
     }
 
     if let Some(field) = exif.get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
