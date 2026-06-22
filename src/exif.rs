@@ -188,7 +188,14 @@ fn parse_exif_tags(exif: &exif::Exif) -> ExifData {
     // Collect all EXIF tags as raw key-value pairs
     for field in exif.fields() {
         let tag_name = field.tag.to_string();
-        let value_str = field.display_value().to_string();
+        let value_str = match &field.value {
+            exif::Value::Ascii(vecs) => {
+                // Convert raw bytes to UTF-8 string (display_value() escapes non-ASCII)
+                let bytes: Vec<u8> = vecs.iter().flatten().copied().collect();
+                String::from_utf8_lossy(&bytes).trim().to_string()
+            }
+            _ => field.display_value().to_string(),
+        };
         if !value_str.starts_with("(Binary") && value_str.len() < 500 {
             data.raw_tags.insert(tag_name, value_str);
         }
