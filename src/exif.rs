@@ -30,20 +30,63 @@ pub struct ExifData {
     pub raw_tags: HashMap<String, String>,
 }
 
+/// Unified EXIF value cleaner.
+///
+/// Handles all formats produced by `kamadak-exif`'s `display_value()` and
+/// `Value::Ascii`:
+///   - Simple quoted string: `"R98"` → `R98`
+///   - Quoted string with trailing spaces: `"Meizu     "` → `Meizu`
+///   - Quoted array: `"Flyme4.0", "", "", ...` → `Flyme4.0`
+///   - All-empty array: `"", "", ...` → empty (caller should skip)
+///   - Raw bytes with NUL: `"foo\0\0"` → `foo`
+fn clean_exif_value(raw: &str) -> String {
+    // Fast path: no quotes at all
+    if !raw.contains('"') {
+        return raw.trim().to_string();
+    }
+
+    // Split by `", "` to handle quoted-array format from display_value()
+    let parts: Vec<&str> = raw
+        .split("\", \"")
+        .map(|s| {
+            s.trim()
+                .trim_start_matches('"')
+                .trim_end_matches('"')
+                .trim()
+                .trim_end_matches('\0')
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    parts.join(", ")
+}
+
 /// Convert an EXIF field value to a clean UTF-8 string.
-/// Handles non-ASCII bytes (display_value() escapes them as \xNN) and
-/// trims surrounding quotes, trailing commas, and whitespace.
+/// Delegates to `clean_exif_value` for unified quote/whitespace handling.
 fn exif_field_to_string(field: &exif::Field) -> String {
-    let s = match &field.value {
+    let raw = match &field.value {
         exif::Value::Ascii(vecs) => {
-            let bytes: Vec<u8> = vecs.iter().flatten().copied().collect();
-            String::from_utf8_lossy(&bytes).trim().to_string()
+            // Join non-empty NUL-terminated strings with `", "` so
+            // clean_exif_value can parse the array format uniformly.
+            let parts: Vec<&str> = vecs
+                .iter()
+                .filter_map(|v| {
+                    let s = std::str::from_utf8(v)
+                        .ok()?
+                        .trim_end_matches('\0')
+                        .trim();
+                    if s.is_empty() { None } else { Some(s) }
+                })
+                .collect();
+            if parts.is_empty() {
+                return String::new();
+            }
+            // Quote each part so clean_exif_value can strip them uniformly
+            parts.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ")
         }
         _ => field.display_value().to_string(),
     };
-    // Trim surrounding quotes, trailing commas, and whitespace
-    s.trim_matches(|c: char| c == '"' || c == ',' || c == ' ' || c == '\0')
-        .to_string()
+    clean_exif_value(&raw)
 }
 
 /// Shared helper: extract all EXIF tag values from a parsed `exif::Exif` container.
@@ -204,15 +247,8 @@ fn parse_exif_tags(exif: &exif::Exif) -> ExifData {
     // Collect all EXIF tags as raw key-value pairs
     for field in exif.fields() {
         let tag_name = field.tag.to_string();
-        let value_str = match &field.value {
-            exif::Value::Ascii(vecs) => {
-                // Convert raw bytes to UTF-8 string (display_value() escapes non-ASCII)
-                let bytes: Vec<u8> = vecs.iter().flatten().copied().collect();
-                String::from_utf8_lossy(&bytes).trim().to_string()
-            }
-            _ => field.display_value().to_string(),
-        };
-        if !value_str.starts_with("(Binary") && value_str.len() < 500 {
+        let value_str = exif_field_to_string(field);
+        if !value_str.starts_with("(Binary") && !value_str.is_empty() && value_str.len() < 500 {
             data.raw_tags.insert(tag_name, value_str);
         }
     }
