@@ -71,10 +71,7 @@ fn exif_field_to_string(field: &exif::Field) -> String {
             let parts: Vec<&str> = vecs
                 .iter()
                 .filter_map(|v| {
-                    let s = std::str::from_utf8(v)
-                        .ok()?
-                        .trim_end_matches('\0')
-                        .trim();
+                    let s = std::str::from_utf8(v).ok()?.trim_end_matches('\0').trim();
                     if s.is_empty() { None } else { Some(s) }
                 })
                 .collect();
