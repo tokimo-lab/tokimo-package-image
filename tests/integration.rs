@@ -1,5 +1,4 @@
-//! Integration tests that exercise the public API end-to-end without
-//! relying on the (now removed) `tokimo-package-ffmpeg` dependency.
+//! Integration tests that exercise the public API end-to-end.
 //!
 //! Each test builds a real image in memory using the `image` crate, writes
 //! it to a temp file, and round-trips it through `ThumbnailGenerator` and

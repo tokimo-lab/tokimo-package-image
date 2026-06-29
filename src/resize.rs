@@ -28,6 +28,13 @@ pub(crate) fn resize_to_format(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
+    if is_heic_ext(ext) {
+        return ffmpeg_ffi_file_to_format(source_path, width, format).or_else(|e| {
+            tracing::warn!("[tokimo-package-image] HEIC FFI decode failed ({e}), trying ffmpeg CLI");
+            ffmpeg_file_to_format(source_path, width, height, format).map_err(ThumbnailError::External)
+        });
+    }
+
     if raw_preview::is_raw_with_preview(ext)
         && let Ok(file_data) = std::fs::read(source_path)
         && let Some(jpeg_data) = raw_preview::extract_raw_preview(&file_data)
@@ -120,6 +127,13 @@ pub(crate) fn resize_to_format_from_memory(
     height: u32,
     format: OutputFormat,
 ) -> Result<Vec<u8>, ThumbnailError> {
+    if is_heic_ext(ext) {
+        return ffmpeg_ffi_bytes_to_format(file_bytes, ext, width, format).or_else(|e| {
+            tracing::warn!("[tokimo-package-image] HEIC FFI decode failed ({e}), trying ffmpeg CLI");
+            ffmpeg_cli_bytes_to_format(file_bytes, ext, width, height, format)
+        });
+    }
+
     // 1. libvips from buffer (best: shrink-on-load, no disk I/O)
     match vips::thumbnail_to_format(file_bytes, width, height, format) {
         Ok(out) => return Ok(out),
@@ -206,6 +220,10 @@ fn needs_ffmpeg_fallback(ext: &str) -> bool {
     FFMPEG_DECODABLE.iter().any(|candidate| match_ext == *candidate)
 }
 
+fn is_heic_ext(ext: &str) -> bool {
+    matches!(ext_for_match(ext).as_str(), "heic" | "heif")
+}
+
 fn ext_for_match(ext: &str) -> String {
     ext.trim()
         .trim_matches(['"', '\'', '`', '\\'])
@@ -244,19 +262,18 @@ fn ffmpeg_file_to_format(source_path: &str, width: u32, height: u32, format: Out
     };
 
     let mut cmd = Command::new(ffmpeg);
-    cmd.args([
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        source_path,
-        "-frames:v",
-        "1",
-    ]);
-    if let Some(scale) = &scale {
-        cmd.args(["-vf", scale]);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i", source_path]);
+
+    if is_heic_path(source_path) {
+        let filter = format!("[0:g:0]{}[out]", scale.as_deref().unwrap_or("scale=-1:-1"));
+        cmd.args(["-filter_complex", &filter, "-map", "[out]"]);
+    } else {
+        cmd.args(["-frames:v", "1"]);
+        if let Some(scale) = &scale {
+            cmd.args(["-vf", scale]);
+        }
     }
+
     match format {
         OutputFormat::Webp => {
             cmd.args(["-vcodec", codec, "-quality", "80"]);
@@ -277,6 +294,76 @@ fn ffmpeg_file_to_format(source_path: &str, width: u32, height: u32, format: Out
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     Err(format!("ffmpeg exited with {}: {}", output.status, stderr.trim()))
+}
+
+fn ffmpeg_cli_bytes_to_format(
+    file_bytes: &[u8],
+    ext: &str,
+    width: u32,
+    height: u32,
+    format: OutputFormat,
+) -> Result<Vec<u8>, ThumbnailError> {
+    let temp_ext = ext_for_temp_path(ext);
+    let tmp_path = std::env::temp_dir().join(format!(
+        "tokimo_heic_thumb_{}_{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+        temp_ext
+    ));
+    std::fs::write(&tmp_path, file_bytes).map_err(ThumbnailError::Io)?;
+    let tmp_str = tmp_path.to_string_lossy().to_string();
+    let result = ffmpeg_file_to_format(&tmp_str, width, height, format).map_err(ThumbnailError::External);
+    let _ = std::fs::remove_file(&tmp_path);
+    result
+}
+
+fn ffmpeg_ffi_file_to_format(source_path: &str, width: u32, format: OutputFormat) -> Result<Vec<u8>, ThumbnailError> {
+    let opts = tokimo_package_ffmpeg::image::ImageDecodeOptions {
+        width: (width > 0).then_some(width),
+        format: ffmpeg_ffi_format(format),
+        quality: ffmpeg_ffi_quality(format),
+    };
+    tokimo_package_ffmpeg::image::decode_image(Path::new(source_path), &opts)
+        .map_err(|e| ThumbnailError::External(format!("FFI decode failed: {e}")))
+}
+
+fn ffmpeg_ffi_bytes_to_format(
+    file_bytes: &[u8],
+    ext: &str,
+    width: u32,
+    format: OutputFormat,
+) -> Result<Vec<u8>, ThumbnailError> {
+    let filename_hint = format!("input.{}", ext_for_temp_path(ext));
+    let opts = tokimo_package_ffmpeg::image::ImageDecodeOptions {
+        width: (width > 0).then_some(width),
+        format: ffmpeg_ffi_format(format),
+        quality: ffmpeg_ffi_quality(format),
+    };
+    tokimo_package_ffmpeg::image::decode_image_from_bytes(file_bytes, &filename_hint, &opts)
+        .map_err(|e| ThumbnailError::External(format!("FFI decode failed: {e}")))
+}
+
+fn ffmpeg_ffi_format(format: OutputFormat) -> tokimo_package_ffmpeg::image::ImageFormat {
+    match format {
+        OutputFormat::Webp => tokimo_package_ffmpeg::image::ImageFormat::WebP,
+        OutputFormat::Jpeg => tokimo_package_ffmpeg::image::ImageFormat::Jpeg,
+        OutputFormat::Png => tokimo_package_ffmpeg::image::ImageFormat::Png,
+    }
+}
+
+fn ffmpeg_ffi_quality(format: OutputFormat) -> u8 {
+    match format {
+        OutputFormat::Webp => 80,
+        OutputFormat::Jpeg => 3,
+        OutputFormat::Png => 0,
+    }
+}
+
+fn is_heic_path(path: &str) -> bool {
+    let ext = Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    is_heic_ext(ext)
 }
 
 fn ffmpeg_binary() -> Option<std::path::PathBuf> {

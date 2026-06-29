@@ -2,12 +2,13 @@
 
 ⚠️ **This crate no longer builds the libvips native binaries itself. Native builds (Linux/macOS/Windows) live in [tokimo-lab/tokimo-lib](https://github.com/tokimo-lab/tokimo-lib). This repo only contains the safe Rust FFI bindings consumed via libloading.**
 
-On-the-fly image resize, thumbnail generation (libvips), RAW preview extraction & EXIF parsing for Tokimo.
+On-the-fly image resize, thumbnail generation, RAW preview extraction & EXIF parsing for Tokimo.
 
 ## Features
 
 - **`ThumbnailGenerator`** — concurrency-controlled async thumbnail generation, capped at half the available CPU cores so the tokio runtime keeps threads for I/O work
-- **libvips-backed resizing** — fast, low-memory pipeline encoding to WebP / PNG / JPEG (`OutputFormat`). libvips natively decodes JPEG/PNG/WebP/GIF/TIFF/HEIC/HEIF/AVIF (when built with libheif/libaom support)
+- **libvips-backed resizing** — fast, low-memory pipeline encoding to WebP / PNG / JPEG (`OutputFormat`) for common raster formats
+- **HEIC/HEIF tile-grid decoding** — routes HEIC/HEIF through `tokimo-package-ffmpeg` before libvips fallback so tiled iOS images are assembled before resize
 - **RAW preview extraction** — pulls embedded JPEG previews from CR2 / NEF / ARW / DNG / RAF / RW2 / ORF and other common RAW formats
 - **EXIF reading** — `extract_exif` (from path) and `extract_exif_from_bytes` returning structured `ExifData` (camera, lens, dates, GPS, exposure)
 - **Date / dimension metadata helpers** — `get_image_dimensions`, `get_image_dimensions_from_bytes`, `extract_date_from_filename`, `file_mtime_as_date`
@@ -51,9 +52,11 @@ MIT
 ## Native dependencies
 
 This crate links **libvips** at compile time (via `#[link(...)]` declarations
-in `src/vips.rs`). Inside the [`tokimo.io`](https://github.com/tokimo-lab/tokimo.io)
-monorepo libvips is resolved automatically — populated by `pnpm deps --dep tokimo-lib`
-into `bin/tokimo-lib/current`. Outside the monorepo you need to provide it yourself.
+in `src/vips.rs`) and uses `tokimo-package-ffmpeg` for HEIC/HEIF tile-grid
+assembly before resize. Inside the [`tokimo.io`](https://github.com/tokimo-lab/tokimo.io)
+monorepo these native dependencies are resolved automatically: libvips is populated
+by `pnpm deps --dep tokimo-lib` into `bin/tokimo-lib/current`. Outside the monorepo
+you need to provide them yourself.
 
 Easiest path:
 
