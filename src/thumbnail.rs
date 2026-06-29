@@ -21,7 +21,32 @@ fn max_concurrent() -> usize {
 }
 
 /// Image formats that can be decoded directly from memory (no temp-file needed).
-const MEMORY_DECODABLE: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
+const MEMORY_DECODABLE: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif",
+];
+
+fn ext_for_match(ext: &str) -> String {
+    ext.trim()
+        .trim_matches(['"', '\'', '`', '\\'])
+        .trim_start_matches('.')
+        .trim_matches(['"', '\'', '`', '\\'])
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn ext_for_temp_path(ext: &str) -> String {
+    let cleaned: String = ext
+        .trim()
+        .trim_matches(['"', '\'', '`', '\\'])
+        .trim_start_matches('.')
+        .trim_matches(['"', '\'', '`', '\\'])
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    if cleaned.is_empty() { "bin".to_string() } else { cleaned }
+}
 
 /// On-the-fly thumbnail generation with concurrency control.
 ///
@@ -90,16 +115,16 @@ impl ThumbnailGenerator {
             .await
             .map_err(|_| ThumbnailError::SemaphoreClosed)?;
 
-        let ext_lower = ext.to_lowercase();
+        let match_ext = ext_for_match(ext);
+        let temp_ext = ext_for_temp_path(ext);
 
-        if MEMORY_DECODABLE.contains(&ext_lower.as_str()) {
+        if MEMORY_DECODABLE.contains(&match_ext.as_str()) {
             // Fast path: decode from memory using libvips (shrink-on-load).
             // If libvips buffer API fails, fall through to the temp-file path which
             // uses the file-based libvips API (known to work reliably).
             let bytes_owned = file_bytes.to_vec();
-            let ext_for_tmp = ext_lower.clone();
             let result = tokio::task::spawn_blocking(move || {
-                resize_to_format_from_memory(&bytes_owned, &ext_for_tmp, width, height, format)
+                resize_to_format_from_memory(&bytes_owned, &temp_ext, width, height, format)
             })
             .await
             .map_err(|e| ThumbnailError::Join(e.to_string()))??;
@@ -109,7 +134,7 @@ impl ThumbnailGenerator {
         // Fallback: write temp file and let libvips handle it via the file API
         // (covers HEIC/HEIF/AVIF and other formats that libvips supports natively
         // but the in-memory `image` crate cannot decode).
-        let tmp_path = std::env::temp_dir().join(format!("tokimo_thumb_{photo_id}.{ext}"));
+        let tmp_path = std::env::temp_dir().join(format!("tokimo_thumb_{photo_id}.{temp_ext}"));
         fs::write(&tmp_path, file_bytes).await.map_err(ThumbnailError::Io)?;
 
         let tmp_str = tmp_path.to_string_lossy().to_string();
@@ -124,5 +149,29 @@ impl ThumbnailGenerator {
 
         let bytes = result?;
         Ok((bytes, format.mime_type()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ext_for_match, ext_for_temp_path};
+
+    #[test]
+    fn normalizes_extension_for_matching_only() {
+        assert_eq!(ext_for_match("JPG"), "jpg");
+        assert_eq!(ext_for_match(".PNG"), "png");
+        assert_eq!(ext_for_match("\"HEIC\""), "heic");
+        assert_eq!(ext_for_match(".\"HEIC\""), "heic");
+        assert_eq!(ext_for_match("\\\"HEIC\\\""), "heic");
+        assert_eq!(ext_for_match(".\\\"HEIC\\\""), "heic");
+        assert_eq!(ext_for_match(" 'AvIf' "), "avif");
+    }
+
+    #[test]
+    fn preserves_extension_case_for_temp_paths() {
+        assert_eq!(ext_for_temp_path("JPG"), "JPG");
+        assert_eq!(ext_for_temp_path(".PNG"), "PNG");
+        assert_eq!(ext_for_temp_path("\"HEIC\""), "HEIC");
+        assert_eq!(ext_for_temp_path(" 'AvIf' "), "AvIf");
     }
 }

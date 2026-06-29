@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::path::Path;
+use std::process::Command;
 
 use image::ImageFormat;
 use image::imageops::FilterType;
@@ -9,6 +10,8 @@ use crate::error::ThumbnailError;
 use crate::raw_preview;
 use crate::vips;
 use crate::vips::OutputFormat;
+
+const FFMPEG_DECODABLE: &[&str] = &["heic", "heif", "avif"];
 
 /// CPU-bound: decode image, apply EXIF orientation, resize, encode to target format.
 ///
@@ -55,9 +58,13 @@ pub(crate) fn resize_to_format(
         }
     }
 
-    // Primary path: libvips shrink-on-load from file
-    if let Ok(out) = vips::thumbnail_file_to_format(source_path, width, height, format) {
+    let vips_result = vips::thumbnail_file_to_format(source_path, width, height, format);
+    if let Ok(out) = vips_result {
         return Ok(out);
+    }
+
+    if needs_ffmpeg_fallback(ext) {
+        return ffmpeg_file_to_format(source_path, width, height, format).map_err(ThumbnailError::External);
     }
 
     // Fallback: image crate (for formats vips can't handle on this system)
@@ -120,21 +127,33 @@ pub(crate) fn resize_to_format_from_memory(
     }
 
     // 2. libvips from temp file (still fast, avoids full image decode)
+    let temp_ext = ext_for_temp_path(ext);
     let tmp_path = std::env::temp_dir().join(format!(
-        "tokimo_vips_{}_{}.{ext}",
+        "tokimo_vips_{}_{}.{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
+            .map_or(0, |d| d.as_nanos()),
+        temp_ext
     ));
     if std::fs::write(&tmp_path, file_bytes).is_ok() {
         let tmp_str = tmp_path.to_string_lossy().to_string();
         let result = vips::thumbnail_file_to_format(&tmp_str, width, height, format);
-        let _ = std::fs::remove_file(&tmp_path);
         match result {
-            Ok(out) => return Ok(out),
-            Err(e) => tracing::warn!("[tokimo-package-image] libvips file failed ({e}), using image crate"),
+            Ok(out) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Ok(out);
+            }
+            Err(e) => tracing::warn!("[tokimo-package-image] libvips file failed ({e}), trying fallback decoder"),
         }
+
+        if needs_ffmpeg_fallback(ext) {
+            let result = ffmpeg_file_to_format(&tmp_str, width, height, format).map_err(ThumbnailError::External);
+            let _ = std::fs::remove_file(&tmp_path);
+            return result;
+        }
+
+        let _ = std::fs::remove_file(&tmp_path);
     }
 
     // 3. image crate fallback (full-resolution decode — slow for large images)
@@ -180,6 +199,114 @@ fn image_format_for(format: OutputFormat) -> ImageFormat {
         OutputFormat::Jpeg => ImageFormat::Jpeg,
         OutputFormat::Png => ImageFormat::Png,
     }
+}
+
+fn needs_ffmpeg_fallback(ext: &str) -> bool {
+    let match_ext = ext_for_match(ext);
+    FFMPEG_DECODABLE.iter().any(|candidate| match_ext == *candidate)
+}
+
+fn ext_for_match(ext: &str) -> String {
+    ext.trim()
+        .trim_matches(['"', '\'', '`', '\\'])
+        .trim_start_matches('.')
+        .trim_matches(['"', '\'', '`', '\\'])
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn ext_for_temp_path(ext: &str) -> String {
+    let cleaned: String = ext
+        .trim()
+        .trim_matches(['"', '\'', '`', '\\'])
+        .trim_start_matches('.')
+        .trim_matches(['"', '\'', '`', '\\'])
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    if cleaned.is_empty() { "bin".to_string() } else { cleaned }
+}
+
+fn ffmpeg_file_to_format(source_path: &str, width: u32, height: u32, format: OutputFormat) -> Result<Vec<u8>, String> {
+    let ffmpeg = ffmpeg_binary().ok_or_else(|| "ffmpeg binary not found".to_string())?;
+    let scale = match (width, height) {
+        (0, 0) => None,
+        (0, h) => Some(format!("scale=-1:{h}")),
+        (w, 0) => Some(format!("scale={w}:-1")),
+        (w, h) => Some(format!("scale={w}:{h}")),
+    };
+    let codec = match format {
+        OutputFormat::Webp => "libwebp",
+        OutputFormat::Jpeg => "mjpeg",
+        OutputFormat::Png => "png",
+    };
+
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        source_path,
+        "-frames:v",
+        "1",
+    ]);
+    if let Some(scale) = &scale {
+        cmd.args(["-vf", scale]);
+    }
+    match format {
+        OutputFormat::Webp => {
+            cmd.args(["-vcodec", codec, "-quality", "80"]);
+        }
+        OutputFormat::Jpeg => {
+            cmd.args(["-vcodec", codec, "-q:v", "3"]);
+        }
+        OutputFormat::Png => {
+            cmd.args(["-vcodec", codec]);
+        }
+    }
+    cmd.args(["-f", "image2pipe", "pipe:1"]);
+
+    let output = cmd.output().map_err(|e| format!("spawn ffmpeg: {e}"))?;
+    if output.status.success() && !output.stdout.is_empty() {
+        return Ok(output.stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("ffmpeg exited with {}: {}", output.status, stderr.trim()))
+}
+
+fn ffmpeg_binary() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("TOKIMO_FFMPEG_BIN") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    for root_var in ["TOKIMO_WORKSPACE_ROOT", "TOKIMO_PROJECT_ROOT"] {
+        if let Ok(root) = std::env::var(root_var) {
+            let candidate = std::path::PathBuf::from(root)
+                .join("bin")
+                .join("tokimo-lib")
+                .join("current")
+                .join("bin")
+                .join("ffmpeg");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let opt_candidate = std::path::PathBuf::from("/opt/tokimo/bin/tokimo-lib/current/bin/ffmpeg");
+    if opt_candidate.is_file() {
+        return Some(opt_candidate);
+    }
+
+    Some(std::path::PathBuf::from("ffmpeg"))
 }
 
 /// Read EXIF orientation tag from a JPEG/TIFF file.
