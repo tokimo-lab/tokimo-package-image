@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: 1
   TOKIMO_LIB_REPO: tokimo-lab/tokimo-lib
   TOKIMO_LIB_VERSION: v1.1.10
+  FFMPEG_LINK_MODE: dynamic
 
 jobs:
   fmt:
@@ -52,12 +53,20 @@ jobs:
       - name: cargo clippy
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
           LD_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
 
       - name: cargo test
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
           LD_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo test --lib --bins --tests
 
@@ -90,12 +99,20 @@ jobs:
       - name: cargo clippy
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
           DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo clippy --lib --bins --tests -- -D warnings
 
       - name: cargo test
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          PKG_CONFIG_PATH: ${{ runner.temp }}/tokimo-lib/lib/pkgconfig
           DYLD_FALLBACK_LIBRARY_PATH: ${{ runner.temp }}/tokimo-lib/lib
         run: cargo test --lib --bins --tests
 
@@ -131,6 +148,9 @@ jobs:
         shell: bash
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          FFMPEG_DLL_PATH: ${{ runner.temp }}/tokimo-lib/bin
         run: |
           export PATH="${RUNNER_TEMP}/tokimo-lib/bin:$PATH"
           cargo clippy --lib --bins --tests -- -D warnings
@@ -139,6 +159,9 @@ jobs:
         shell: bash
         env:
           TOKIMO_DEP_LIBVIPS_DIR: ${{ runner.temp }}/tokimo-lib
+          FFMPEG_INCLUDE_DIR: ${{ runner.temp }}/tokimo-lib/include
+          FFMPEG_LIBS_DIR: ${{ runner.temp }}/tokimo-lib/lib
+          FFMPEG_DLL_PATH: ${{ runner.temp }}/tokimo-lib/bin
         run: |
           export PATH="${RUNNER_TEMP}/tokimo-lib/bin:$PATH"
           cargo test --lib --bins --tests
